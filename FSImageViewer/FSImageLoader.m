@@ -24,11 +24,12 @@
 
 #import <EGOCache/EGOCache.h>
 #import <CommonCrypto/CommonDigest.h>
+#import <AFNetworking/AFImageDownloader.h>
 #import "FSImageLoader.h"
-#import "AFHTTPRequestOperation.h"
 
 @implementation FSImageLoader {
     NSMutableArray *runningRequests;
+    AFImageDownloader *_downloader;
 }
 
 + (FSImageLoader *)sharedInstance {
@@ -55,15 +56,15 @@
 }
 
 - (void)cancelAllRequests {
-    for (AFHTTPRequestOperation *imageRequestOperation in runningRequests) {
-        [imageRequestOperation cancel];
+    for (AFImageDownloadReceipt *receipt in runningRequests) {
+        [_downloader cancelTaskForImageDownloadReceipt:receipt];
     }
 }
 
 - (void)cancelRequestForUrl:(NSURL *)aURL {
-    for (AFHTTPRequestOperation *imageRequestOperation in runningRequests) {
-        if ([imageRequestOperation.request.URL isEqual:aURL]) {
-            [imageRequestOperation cancel];
+    for (AFImageDownloadReceipt *receipt in runningRequests) {
+        if ([receipt.task.originalRequest.URL isEqual:aURL]) {
+            [_downloader cancelTaskForImageDownloadReceipt:receipt];
             break;
         }
     }
@@ -105,32 +106,28 @@
         [self cancelRequestForUrl:aURL];
 
         NSURLRequest *urlRequest = [[NSURLRequest alloc] initWithURL:aURL cachePolicy:NSURLRequestReturnCacheDataElseLoad timeoutInterval:_timeoutInterval];
-        AFHTTPRequestOperation *imageRequestOperation = [[AFHTTPRequestOperation alloc] initWithRequest:urlRequest];
-        imageRequestOperation.responseSerializer = [AFImageResponseSerializer serializer];
-        [runningRequests addObject:imageRequestOperation];
-        __weak AFHTTPRequestOperation *imageRequestOperationForBlock = imageRequestOperation;
-
-        [imageRequestOperation setCompletionBlockWithSuccess:^(AFHTTPRequestOperation *operation, id responseObject) {
-            UIImage *image = responseObject;
-            [[EGOCache globalCache] setImage:image forKey:cacheKey];
+        
+        AFImageDownloadReceipt *receipt;
+        
+        receipt = [_downloader downloadImageForURLRequest:urlRequest success:^(NSURLRequest * _Nonnull request, NSHTTPURLResponse * _Nullable response, UIImage * _Nonnull responseObject) {
             if (imageBlock) {
-                imageBlock(image, nil);
+                imageBlock(responseObject, nil);
             }
-            [runningRequests removeObject:imageRequestOperationForBlock];
-        } failure:^(AFHTTPRequestOperation *operation, NSError *error) {
+            if (receipt != nil) {
+                [runningRequests removeObject:receipt];
+            }
+        } failure:^(NSURLRequest * _Nonnull request, NSHTTPURLResponse * _Nullable response, NSError * _Nonnull error) {
             if (imageBlock) {
                 imageBlock(nil, error);
             }
-            [runningRequests removeObject:imageRequestOperationForBlock];
-        }];
-        
-        [imageRequestOperation setDownloadProgressBlock:^(NSUInteger bytesRead, long long totalBytesRead, long long totalBytesExpectedToRead) {
-            if (progress) {
-                progress((float)totalBytesRead / totalBytesExpectedToRead);
+            if (receipt != nil) {
+                [runningRequests removeObject:receipt];
             }
         }];
         
-        [imageRequestOperation start];
+        if (receipt != nil) {
+            [runningRequests addObject:receipt];
+        }
     }
 }
 
